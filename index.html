@@ -91,20 +91,27 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    html, body {
+    html {
       width: 100%;
-      height: 100%;
+      min-height: 100%;
+      overflow-x: hidden;
+    }
+
+    body {
+      width: 100%;
+      min-height: 100vh;
       background-color: var(--bg-void);
       color: var(--text-main);
       font-family: var(--font-mono);
       font-size: 12px;
       line-height: 1.35;
       letter-spacing: 0.02em;
-      touch-action: pan-y;
       -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
       overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       transition: background-color 0.25s, color 0.25s;
     }
 
@@ -331,6 +338,12 @@
       overflow: hidden;
       background: #000;
       box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.95);
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+    }
+    .round-screen-glass:active {
+      cursor: grabbing;
     }
 
     #displayCanvas {
@@ -880,12 +893,13 @@
         <!-- Круглое стекло дисплея -->
         <div class="round-screen-glass" id="roundScreenGlass" title="Перетаскивайте для центрирования в круг">
           <canvas id="displayCanvas" width="240" height="240"></canvas>
+          <img id="animatedGifView" alt="Animated GIF Preview" style="position: absolute; top: 0; left: 0; width: 200px; height: 200px; object-fit: cover; border-radius: 50%; pointer-events: none; z-index: 2; display: none; transform-origin: center center;" />
           <div class="round-glass-reflection"></div>
           <div class="round-scanlines" id="screenScanlines"></div>
           <div class="round-hud" id="roundHud">
             <div class="hud-center"></div>
           </div>
-          <div class="round-screen-badge">ST7789 · 240×240 CIR</div>
+          <div class="round-screen-badge" id="screenBadgeText">ST7789 · 240×240 CIR</div>
         </div>
       </div>
 
@@ -1275,11 +1289,14 @@
       function renderDisplay() {
         const slot = state.slots[state.activeSlotIndex];
         const img = slot.img;
+        const animatedGifView = document.getElementById('animatedGifView');
+        const screenBadgeText = document.getElementById('screenBadgeText');
 
-        displayCtx.fillStyle = '#05070a';
-        displayCtx.fillRect(0, 0, 240, 240);
-
-        if (!img) {
+        if (!img && !slot.isGif) {
+          if (animatedGifView) animatedGifView.style.display = 'none';
+          displayCanvas.style.display = 'block';
+          displayCtx.fillStyle = '#05070a';
+          displayCtx.fillRect(0, 0, 240, 240);
           displayCtx.fillStyle = 'rgba(208, 0, 54, 0.5)';
           displayCtx.font = '11px ' + getComputedStyle(document.body).fontFamily;
           displayCtx.textAlign = 'center';
@@ -1287,8 +1304,43 @@
           displayCtx.fillStyle = '#64748b';
           displayCtx.font = '9px monospace';
           displayCtx.fillText('TAP UPLOAD TO INJECT', 120, 135);
+          if (screenBadgeText) screenBadgeText.textContent = 'ST7789 · 240×240 CIR';
           return;
         }
+
+        // --- ЕСЛИ ЗАГРУЖЕН АНИМИРОВАННЫЙ GIF: ПРЯМОЕ ВОСПРОИЗВЕДЕНИЕ В КРУГЛОМ ЭКРАНЕ ---
+        if (slot.isGif && slot.gifUrl && animatedGifView) {
+          if (animatedGifView.src !== slot.gifUrl) {
+            animatedGifView.src = slot.gifUrl;
+          }
+          animatedGifView.style.display = 'block';
+          displayCanvas.style.display = 'none';
+
+          // Применяем аппаратные CSS-фильтры к живой анимации GIF
+          let filterStr = `brightness(${slot.brightness}%) contrast(${slot.contrast}%)`;
+          if (slot.filter === 'phosphor') filterStr += ' sepia(1) hue-rotate(85deg) saturate(3)';
+          else if (slot.filter === 'cyan') filterStr += ' sepia(1) hue-rotate(150deg) saturate(3)';
+          else if (slot.filter === 'glitch') filterStr += ' hue-rotate(280deg) saturate(2)';
+          else if (slot.filter === 'binary') filterStr += ' grayscale(1) contrast(300%)';
+          else if (slot.filter === 'invert') filterStr += ' invert(1)';
+
+          animatedGifView.style.filter = filterStr;
+          animatedGifView.style.transform = `translate(${slot.panX}px, ${slot.panY}px) scale(${slot.zoom})`;
+
+          if (screenBadgeText) {
+            screenBadgeText.innerHTML = 'ST7789 · <span style="color:#00ff66;font-weight:bold;">▶ GIF LIVE</span>';
+          }
+          updateThumbnail(state.activeSlotIndex);
+          return;
+        }
+
+        // --- ДЛЯ СТАТИЧЕСКИХ КАРТИНОК: CANVAS 240x240 ---
+        if (animatedGifView) animatedGifView.style.display = 'none';
+        displayCanvas.style.display = 'block';
+        if (screenBadgeText) screenBadgeText.textContent = 'ST7789 · 240×240 CIR';
+
+        displayCtx.fillStyle = '#05070a';
+        displayCtx.fillRect(0, 0, 240, 240);
 
         const offCanvas = document.createElement('canvas');
         offCanvas.width = 240;
@@ -1322,7 +1374,6 @@
           let g = data[i + 1];
           let b = data[i + 2];
 
-          // Яркость и контраст
           r = contrastFactor * (r * brightnessMul - 128) + 128;
           g = contrastFactor * (g * brightnessMul - 128) + 128;
           b = contrastFactor * (b * brightnessMul - 128) + 128;
@@ -1373,7 +1424,7 @@
         thumbCtx.fillStyle = '#05070a';
         thumbCtx.fillRect(0, 0, 70, 70);
 
-        if (slot.img) {
+        if (slot && slot.img) {
           if (slotIndex === state.activeSlotIndex) {
             thumbCtx.drawImage(displayCanvas, 0, 0, 70, 70);
           } else {
@@ -1425,36 +1476,38 @@
 
       function onPointerDown(e) {
         isDragging = true;
-        const pageX = e.touches ? e.touches[0].pageX : e.pageX;
-        const pageY = e.touches ? e.touches[0].pageY : e.pageY;
-        startX = pageX; startY = pageY;
+        const pt = e.touches ? e.touches[0] : e;
+        startX = pt.pageX;
+        startY = pt.pageY;
         const slot = state.slots[state.activeSlotIndex];
-        initPanX = slot.panX; initPanY = slot.panY;
+        initPanX = slot.panX;
+        initPanY = slot.panY;
       }
 
       function onPointerMove(e) {
         if (!isDragging) return;
         if (e.cancelable) e.preventDefault();
-        const pageX = e.touches ? e.touches[0].pageX : e.pageX;
-        const pageY = e.touches ? e.touches[0].pageY : e.pageY;
-
+        const pt = e.touches ? e.touches[0] : e;
         const slot = state.slots[state.activeSlotIndex];
-        slot.panX = initPanX + (pageX - startX);
-        slot.panY = initPanY + (pageY - startY);
+        slot.panX = initPanX + (pt.pageX - startX);
+        slot.panY = initPanY + (pt.pageY - startY);
 
         panCoordsText.textContent = `OFFSET: ${Math.round(slot.panX)}, ${Math.round(slot.panY)}`;
         renderDisplay();
       }
 
-      function onPointerUp() { isDragging = false; }
+      function onPointerUp() {
+        isDragging = false;
+      }
 
       roundScreenGlass.addEventListener('mousedown', onPointerDown);
       window.addEventListener('mousemove', onPointerMove);
       window.addEventListener('mouseup', onPointerUp);
 
       roundScreenGlass.addEventListener('touchstart', onPointerDown, { passive: false });
-      window.addEventListener('touchmove', onPointerMove, { passive: false });
-      window.addEventListener('touchend', onPointerUp);
+      roundScreenGlass.addEventListener('touchmove', onPointerMove, { passive: false });
+      roundScreenGlass.addEventListener('touchend', onPointerUp);
+      roundScreenGlass.addEventListener('touchcancel', onPointerUp);
 
       /* ------------------------------------------------------------------------
          Слушатели всех 4 ползунков
@@ -1547,20 +1600,40 @@
       fileInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
-          logToTerminal(`FILE INGEST: ${file.name}`, 'info');
-          const reader = new FileReader();
-          reader.onload = (event) => {
+          const isGif = file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif');
+          const currentSlot = state.slots[state.activeSlotIndex];
+          currentSlot.name = file.name.substring(0, 8).toUpperCase();
+          currentSlot.fileSize = file.size;
+
+          if (isGif) {
+            currentSlot.isGif = true;
+            currentSlot.gifBlob = file;
+            currentSlot.gifUrl = URL.createObjectURL(file);
+            renderDisplay();
             const img = new Image();
             img.onload = () => {
-              const currentSlot = state.slots[state.activeSlotIndex];
               currentSlot.img = img;
-              currentSlot.name = file.name.substring(0, 8).toUpperCase();
-              renderDisplay();
-              logToTerminal(`240x240 CIRCULAR MATRIX CROPPED: OK`, 'success');
+              updateThumbnail(state.activeSlotIndex);
+              logToTerminal(`ANIMATED GIF LOADED: ${file.name} (${Math.round(file.size / 1024)} KB) [PLAYING LIVE]`, 'success');
             };
-            img.src = event.target.result;
-          };
-          reader.readAsDataURL(file);
+            img.src = currentSlot.gifUrl;
+          } else {
+            currentSlot.isGif = false;
+            currentSlot.gifBlob = null;
+            currentSlot.gifUrl = null;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const img = new Image();
+              img.onload = () => {
+                currentSlot.img = img;
+                renderDisplay();
+                logToTerminal(`STATIC IMAGE LOADED: ${file.name} (240x240 CROPPED)`, 'success');
+              };
+              img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+          }
+          fileInput.value = '';
         }
       });
 
@@ -1570,6 +1643,10 @@
       document.querySelectorAll('.preset-chip').forEach(chip => {
         chip.addEventListener('click', () => {
           const presetId = chip.getAttribute('data-preset');
+          const currentSlot = state.slots[state.activeSlotIndex];
+          currentSlot.isGif = false;
+          currentSlot.gifBlob = null;
+          currentSlot.gifUrl = null;
           logToTerminal(`LOAD PRESET: ${presetId.toUpperCase()}`, 'cyan');
 
           if (presetId === 'procedural_wire') {
@@ -1629,16 +1706,21 @@
          Передача данных в ESP32
          ------------------------------------------------------------------------ */
       async function uploadToESP32(blob, slotIndex) {
-        logToTerminal(`FLASH SLOT ${slotIndex}: ${blob.size} BYTES`, 'cyan');
+        const slotNum = slotIndex + 1;
+        const currentSlot = state.slots[slotIndex];
+        const isGif = currentSlot && currentSlot.isGif;
+        const filename = isGif ? `slot${slotNum}.gif` : `slot${slotNum}.bin`;
+
+        logToTerminal(`BURST FLASH SLOT 0${slotNum}: ${blob.size} BYTES (${filename})...`, 'cyan');
         try {
           const formData = new FormData();
-          formData.append('slot', slotIndex);
-          formData.append('data', blob, `slot_0${slotIndex + 1}.bin`);
+          formData.append('slot', slotNum);
+          formData.append('data', blob, filename);
 
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 2000);
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-          const response = await fetch(`/upload?slot=${slotIndex}`, {
+          const response = await fetch(`/api/upload?slot=${slotNum}`, {
             method: 'POST',
             body: formData,
             signal: controller.signal
@@ -1646,7 +1728,7 @@
           clearTimeout(timeoutId);
 
           if (response.ok) {
-            logToTerminal(`HARDWARE LITTLEFS WRITE: OK`, 'success');
+            logToTerminal(`ESP32 HARDWARE CONFIRMED: /${filename} COMMITTED TO FLASH!`, 'success');
             return true;
           }
         } catch (err) {
@@ -1677,7 +1759,7 @@
             const percent = Math.round(progress * 100);
 
             bufferPercent.textContent = `${percent}%`;
-            bufferBytes.textContent = `${(bytesWritten / 1024).toFixed(1)} / 115.2 KB`;
+            bufferBytes.textContent = `${(bytesWritten / 1024).toFixed(1)} / ${(totalBytes / 1024).toFixed(1)} KB`;
 
             if (bytesWritten >= totalBytes) {
               clearInterval(interval);
@@ -1686,7 +1768,7 @@
               btnTransmit.querySelector('.btn-text').textContent = 'ЗАПИСАТЬ В БРЕЛОК';
               roundBezel.classList.remove('glitching');
 
-              logToTerminal(`SECTOR ERASE & WRITE: 115200 BYTES OK`, 'success');
+              logToTerminal(`SECTOR ERASE & WRITE: ${totalBytes} BYTES OK`, 'success');
               logToTerminal(`RAMWR CMD FLUSHED TO ROUND LCD`, 'success');
               resolve(true);
             }
@@ -1696,9 +1778,18 @@
 
       btnTransmit.addEventListener('click', async () => {
         if (state.isTransmitting) return;
-        const rawBuffer = encodeCanvasToRGB565();
-        const blob = new Blob([rawBuffer], { type: 'application/octet-stream' });
-        await uploadToESP32(blob, state.activeSlotIndex);
+        const currentSlot = state.slots[state.activeSlotIndex];
+
+        if (currentSlot.isGif && currentSlot.gifBlob) {
+          // Отправка реального многокадрового GIF файла на ESP32
+          logToTerminal(`SENDING MULTI-FRAME GIF: ${currentSlot.name} (${Math.round(currentSlot.gifBlob.size / 1024)} KB)...`, 'crimson');
+          await uploadToESP32(currentSlot.gifBlob, state.activeSlotIndex);
+        } else {
+          // Отправка одиночного кадра / холста
+          const rawBuffer = encodeCanvasToRGB565();
+          const blob = new Blob([rawBuffer], { type: 'application/octet-stream' });
+          await uploadToESP32(blob, state.activeSlotIndex);
+        }
       });
 
       /* ------------------------------------------------------------------------
@@ -1744,14 +1835,20 @@
       });
 
       /* ------------------------------------------------------------------------
-         Старт
+         Старт приложения
          ------------------------------------------------------------------------ */
-      window.addEventListener('DOMContentLoaded', () => {
+      function startApp() {
         initSlots();
         logToTerminal('WIRED_KEYCHAIN OS READY', 'crimson');
         logToTerminal('TARGET: ESP32-C3 SUPERMINI (4MB)', 'info');
         logToTerminal('DISPLAY: ST7789 1.28" ROUND IPS', 'info');
-      });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startApp);
+      } else {
+        startApp();
+      }
 
       window.uploadToESP32 = uploadToESP32;
     })();
