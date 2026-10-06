@@ -1,0 +1,6 @@
+{
+  "name": "Wired Keychain // ESP32 1.3\" Display Manager",
+  "description": "Laincore and wirecore retro-futuristic mobile interface for ESP32 digital keychain with 240x240 IPS display memory injector, real-time image processor, and telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
